@@ -1,0 +1,91 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: mysql-backup-template
+  annotations:
+    description: 'Template de backups para bases Mysql'
+    tags: 'database'
+    iconClass: icon-Mysql
+parameters:
+  - name: DATABASE_BACKUP_KEEP
+    description: 'Number of backups to keep'
+    value: '90'
+  - name: DATABASE_BACKUP_SCHEDULE
+    description: 'Cron-like schedule expression'
+    value: '0 0 * * *'
+  - name: DATABASE_USER
+    description: 'database user with privileges'
+    required: true
+  - name: DATABASE_PASSWORD
+    description: 'database user password'
+    required: true
+  - name: DATABASE_HOST
+    description: 'Hostname of DB server'
+    required: true
+  - name: DATABASE_PORT
+    description: 'DB Port'
+    required: true
+    value: '3306'
+  - name: DATABASE_NAME
+    description: 'Database to backup'
+    required: true
+  - name: DATABASE_BACKUP_VOLUME_CLAIM
+    description: 'Name of the volume claim to be used as storage'
+    required: true
+  - name: TZ
+    description: 'Name of the TimeZone'
+    required: true
+    value: 'America/Montevideo'
+objects:
+  - apiVersion: batch/v2alpha1
+    kind: CronJob
+    metadata:
+      name: mysql-backup
+    spec:
+      schedule: ${DATABASE_BACKUP_SCHEDULE}
+      successfulJobsHistoryLimit: 3
+      failedJobsHistoryLimit: 1
+      concurrencyPolicy: Forbid
+      jobTemplate:
+        spec:
+          template:
+            spec:
+              volumes:
+                - name: database-backup
+                  persistentVolumeClaim:
+                    claimName: ${DATABASE_BACKUP_VOLUME_CLAIM}
+              containers:
+                - name: database-backup
+                  image: 'registry.access.redhat.com/rhscl/mysql-57-rhel7'
+                  command:
+                    - 'bash'
+                    - '-eo'
+                    - 'pipefail'
+                    - '-c'
+                    - >
+                      trap "echo Backup failed; exit 0" ERR;
+                      FILENAME=backup-${DATABASE_NAME}-`date +%Y-%m-%d_%H%M%S`.sql.gz;
+                      time (find /database-backup -type f -name "backup-${DATABASE_NAME}-*"  -exec ls -1tr "{}" + | head -n -${DATABASE_BACKUP_KEEP} | xargs rm -fr;
+                      mysqldump --host=$DATABASE_HOST --port=$DATABASE_PORT --user=$DATABASE_USER --password=$DATABASE_PASSWORD --databases $DATABASE_NAME | gzip > /database-backup/$FILENAME);
+                      echo "";
+                      echo "Backup successful"; du -h /database-backup/$FILENAME;
+                      echo "to restore the backup to the serviced host use: $ mysqldump --user=$DATABASE_USER --password --host=$DATABASE_HOST --port=$DATABASE_PORT < /database-backup/<backupfile> (unpacked)"
+                  env:
+                    - name: DATABASE_BACKUP_KEEP
+                      value: ${DATABASE_BACKUP_KEEP}
+                    - name: DATABASE_USER
+                      value: ${DATABASE_USER}
+                    - name: DATABASE_PASSWORD
+                      value: ${DATABASE_PASSWORD}
+                    - name: DATABASE_HOST
+                      value: ${DATABASE_HOST}
+                    - name: DATABASE_PORT
+                      value: ${DATABASE_PORT}
+                    - name: DATABASE_NAME
+                      value: ${DATABASE_NAME}
+                    - name: TZ
+                      value: ${TZ}
+                  volumeMounts:
+                    - name: database-backup
+                      mountPath: /database-backup
+              restartPolicy: Never
